@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>KineWatch</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <h1>KineWatch</h1>
+      <form id="config-form">
+        <label class="field">
+          <span class="field-label">Minimum speed</span>
+          <input
+            id="min-speed"
+            name="min-speed"
+            type="number"
+            min="0.1"
+            max="16"
+            step="0.1"
+            required
+          />
+        </label>
+        <label class="field">
+          <span class="field-label">Maximum speed</span>
+          <input
+            id="max-speed"
+            name="max-speed"
+            type="number"
+            min="0.1"
+            max="16"
+            step="0.1"
+            required
+          />
+        </label>
+        <button id="save-button" type="submit">Save &amp; apply</button>
+      </form>
+      <p id="status" class="status" aria-live="polite"></p>
+      <section id="info" class="info" aria-live="polite">
+        <p>
+          <strong>Heat-map:</strong>
+          <span id="heatmap-status">—</span>
+        </p>
+        <p>
+          <strong>Playback rate:</strong>
+          <span id="playback-rate">—</span>
+        </p>
+      </section>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

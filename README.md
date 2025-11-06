@@ -1,44 +1,46 @@
-# youtube-heatmap
+# KineWatch
 
-Easily retrieve data about “most replayed” graph for videos on Youtube.
+KineWatch is a Chrome extension that uses YouTube’s “Most replayed” heat-map data to modulate playback speed in real time:
 
-![most replayed](most-replayed.png)
+- **Slow down** when the crowd replays a segment the most.
+- **Speed up** through the quiet stretches—no more manual scrubbing.
 
-## Description
+## Install (unpacked)
 
-YouTube's implementation on the web page is relatively straight forward and easy to extract (using an extension inject). A SVG tag on the page (`svg.ytp-heat-map-svg` 1000x100) contains a path defined with [cubic Bézier curves](https://developer.mozilla.org/en-US/docs/Web/SVG/Attribute/d#cubic_b%C3%A9zier_curve) (a `C` followed by three `x,y` pairs).
+1. Clone/download this repository.
+2. Open `chrome://extensions`, enable **Developer mode**, and choose **Load unpacked**.
+3. Select the `extension/` directory.
 
-Every third `x,y` parameter after a `C`, where `x` ends with `5.0`, is a usable data point:
+## Usage
 
-`x` is the time stamp in percent. Just compute `(x-5)/1000` for a value from 0 to 1.
+1. Open a YouTube watch page.
+2. Launch the KineWatch popup.
+3. Set your minimum and maximum speeds (defaults to 1×–2×, range 0.1×–16×) and press **Save & apply**.
+4. Watch the player overlay in the top-right—it displays the current playback rate, raw heat ratio, and speed ratio so you can see adjustments live (even while scrubbing).
 
-`y` is the heat value for this time period. Just compute `(100-y)/100` for a value from 0 to 1.
+## How it works
 
-## Options
+- Every “Most replayed” chapter is a 1000×100 SVG containing cubic Bézier curves.  
+- KineWatch samples the endpoints of those curves, projects them onto the full video timeline using chapter offsets, and tracks the global min/max raw `y` values.  
+- Playback speed (`video.playbackRate`) is derived strictly from that raw range, guaranteeing that every video hits your configured minimum and maximum speeds.
+- A mutation observer plus `yt-navigate-*` listeners keep the script attached across YouTube’s SPA navigation.
 
-Internally puppeteer is used, so you can pass optional parameters as the second parameter, they are documented [here](https://pptr.dev/next/api/puppeteer.waitforselectoroptions).
-
-
-## JavaScript Usage
-
-```javascript
-var search = require('youtube-heatmap');
-
-getHeatMap('https://www.youtube.com/watch?v=_lEzN8C5c7k')
-    .then(heatMap => {
-        console.log(heatMap)
-    })
+## Project structure
 
 ```
-
-## TypeScript Usage
-
-A TypeScript definition file is included so that 'youtube-search' can be used
-easily from TypeScript.
-
-```typescript
-import { getHeatMap } from 'youtube-heatmap'
-
-const heatMap = await getHeatMap('https://www.youtube.com/watch?v=_lEzN8C5c7k')
-console.log(heatMap)
+extension/
+  ├─ manifest.json
+  ├─ contentScript.js
+  ├─ popup.html
+  ├─ popup.js
+  └─ popup.css
 ```
+
+## Development
+
+- Reload the unpacked extension after making changes.
+- The project uses vanilla JavaScript/Manifest V3—no build step or bundler required.
+
+## License
+
+MIT © 2025 setrf. See [LICENSE](LICENSE) for full text.
