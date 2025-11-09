@@ -105,3 +105,6 @@ dist
 
 # macOS metadata
 .DS_Store
+
+# Chrome Web Store packages
+release/

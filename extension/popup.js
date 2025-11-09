@@ -9,7 +9,9 @@ const storageArea =
 
 const DEFAULT_CONFIG = {
   minSpeed: 1,
-  maxSpeed: 2
+  maxSpeed: 2,
+  smoothing: 0.25,
+  refreshIntervalMs: 1000
 };
 
 const MIN_SPEED = 0.1;
@@ -22,6 +24,22 @@ const sanitizeSpeed = (value, fallback) => {
     return fallback;
   }
   return clamp(value, MIN_SPEED, MAX_SPEED);
+};
+
+const sanitizeSmoothing = (value, fallback) => {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return clamp(parsed, 0, 0.95);
+};
+
+const sanitizeRefreshInterval = (value, fallback) => {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return clamp(parsed, 250, 4000);
 };
 
 const normalizeConfig = (input = {}) => {
@@ -37,7 +55,12 @@ const normalizeConfig = (input = {}) => {
 
   return {
     minSpeed: round(minSpeed),
-    maxSpeed: round(maxSpeed)
+    maxSpeed: round(maxSpeed),
+    smoothing: sanitizeSmoothing(source.smoothing, DEFAULT_CONFIG.smoothing),
+    refreshIntervalMs: sanitizeRefreshInterval(
+      source.refreshIntervalMs,
+      DEFAULT_CONFIG.refreshIntervalMs
+    )
   };
 };
 
@@ -85,45 +108,48 @@ const isYouTubeWatchPage = (url) =>
 const minInput = document.getElementById("min-speed");
 const maxInput = document.getElementById("max-speed");
 const statusElement = document.getElementById("status");
-const heatmapStatusElement = document.getElementById("heatmap-status");
-const playbackRateElement = document.getElementById("playback-rate");
+const presetButtons = Array.from(
+  document.querySelectorAll("[data-preset-min][data-preset-max]")
+);
+const smoothingInput = document.getElementById("smoothing");
+const smoothingValueElement = document.getElementById("smoothing-value");
+const refreshInput = document.getElementById("refresh-interval");
 const saveButton = document.getElementById("save-button");
 const formElement = document.getElementById("config-form");
 
 let activeTabId = null;
 
-const setStatus = (message, isError = false) => {
-  statusElement.textContent = message;
-  statusElement.classList.toggle("error", Boolean(isError));
+const updateSmoothingLabel = (value) => {
+  if (!smoothingValueElement) {
+    return;
+  }
+  const percentage = Math.round(clamp(value, 0, 0.95) * 100);
+  smoothingValueElement.textContent = `${percentage}%`;
 };
 
-const setHeatmapInfo = ({
-  heatmapAvailable,
-  rawRatioAvailable,
-  playbackRate,
-  lastError
-} = {}) => {
-  if (heatmapAvailable) {
-    heatmapStatusElement.textContent = rawRatioAvailable
-      ? "Detected (raw ratio)"
-      : "Detected";
-  } else if (lastError) {
-    heatmapStatusElement.textContent = `Unavailable (${lastError})`;
-  } else {
-    heatmapStatusElement.textContent = "Unavailable";
-  }
-
-  if (Number.isFinite(playbackRate)) {
-    playbackRateElement.textContent = `${playbackRate.toFixed(2)}×`;
-  } else {
-    playbackRateElement.textContent = "—";
+const setStatus = (message, tone = "info") => {
+  const hasMessage = Boolean(message);
+  statusElement.textContent = hasMessage ? message : "";
+  statusElement.hidden = !hasMessage;
+  statusElement.classList.toggle("is-visible", hasMessage);
+  statusElement.classList.toggle("error", hasMessage && tone === "error");
+  statusElement.classList.toggle("positive", hasMessage && tone === "success");
+  if (!hasMessage) {
+    statusElement.classList.remove("error", "positive");
   }
 };
+
+updateSmoothingLabel(DEFAULT_CONFIG.smoothing);
 
 const setFormDisabled = (disabled) => {
   minInput.disabled = disabled;
   maxInput.disabled = disabled;
   saveButton.disabled = disabled;
+  smoothingInput.disabled = disabled;
+  refreshInput.disabled = disabled;
+  presetButtons.forEach((button) => {
+    button.disabled = disabled;
+  });
 };
 
 const refreshActiveTabState = async () => {
@@ -132,8 +158,7 @@ const refreshActiveTabState = async () => {
 
   if (!tab || !isYouTubeWatchPage(tab.url)) {
     setFormDisabled(true);
-    setHeatmapInfo();
-    setStatus("Open a YouTube video to enable KineWatch.", true);
+    setStatus("Open a YouTube video to enable KineWatch.", "error");
     return;
   }
 
@@ -154,14 +179,11 @@ const refreshActiveTabState = async () => {
       const normalized = normalizeConfig(state.config);
       minInput.value = normalized.minSpeed;
       maxInput.value = normalized.maxSpeed;
+      smoothingInput.value = normalized.smoothing;
+      refreshInput.value = normalized.refreshIntervalMs;
+      updateSmoothingLabel(Number.parseFloat(smoothingInput.value));
     }
 
-    setHeatmapInfo({
-      heatmapAvailable: state?.heatmapAvailable ?? false,
-      rawRatioAvailable: state?.rawRatioAvailable ?? false,
-      playbackRate: state?.playbackRate ?? null,
-      lastError: state?.lastError ?? null
-    });
   } catch (error) {
     const message =
       error instanceof Error &&
@@ -170,14 +192,20 @@ const refreshActiveTabState = async () => {
         : error instanceof Error
         ? error.message
         : "Reload the video to activate KineWatch.";
-    setHeatmapInfo();
-    setStatus(message, true);
+    setStatus(message, "error");
   }
 };
 
 const renderConfig = (config) => {
   minInput.value = config.minSpeed;
   maxInput.value = config.maxSpeed;
+  if (smoothingInput) {
+    smoothingInput.value = config.smoothing;
+    updateSmoothingLabel(Number.parseFloat(smoothingInput.value));
+  }
+  if (refreshInput) {
+    refreshInput.value = config.refreshIntervalMs;
+  }
 };
 
 const handleSubmit = async (event) => {
@@ -187,7 +215,7 @@ const handleSubmit = async (event) => {
   const maxValue = Number.parseFloat(maxInput.value);
 
   if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) {
-    setStatus("Provide numeric values for both speeds.", true);
+    setStatus("Provide numeric values for both speeds.", "error");
     return;
   }
 
@@ -195,11 +223,26 @@ const handleSubmit = async (event) => {
   const maxSpeed = sanitizeSpeed(maxValue, DEFAULT_CONFIG.maxSpeed);
 
   if (minSpeed > maxSpeed) {
-    setStatus("Minimum speed must be less than or equal to maximum speed.", true);
+    setStatus(
+      "Minimum speed must be less than or equal to maximum speed.",
+      "error"
+    );
     return;
   }
 
-  const config = normalizeConfig({ minSpeed, maxSpeed });
+  const smoothing = smoothingInput
+    ? Number.parseFloat(smoothingInput.value)
+    : DEFAULT_CONFIG.smoothing;
+  const refreshIntervalMs = refreshInput
+    ? Number.parseInt(refreshInput.value, 10)
+    : DEFAULT_CONFIG.refreshIntervalMs;
+
+  const config = normalizeConfig({
+    minSpeed,
+    maxSpeed,
+    smoothing,
+    refreshIntervalMs
+  });
 
   setStatus("Saving…");
   saveButton.disabled = true;
@@ -234,16 +277,31 @@ const handleSubmit = async (event) => {
       }
     }
 
-    setStatus("Saved and applied.");
+    setStatus("Saved and applied.", "success");
     await refreshActiveTabState();
   } catch (error) {
     setStatus(
       error instanceof Error ? error.message : "Unable to save settings.",
-      true
+      "error"
     );
   } finally {
     saveButton.disabled = false;
   }
+};
+
+const handlePresetClick = (event) => {
+  const button = event.currentTarget;
+  const minValue = Number.parseFloat(button.dataset.presetMin);
+  const maxValue = Number.parseFloat(button.dataset.presetMax);
+  if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) {
+    return;
+  }
+  minInput.value = minValue;
+  maxInput.value = maxValue;
+  setStatus(
+    `Applying ${minValue.toFixed(2)}×–${maxValue.toFixed(2)}× preset…`
+  );
+  formElement.requestSubmit();
 };
 
 const init = async () => {
@@ -256,10 +314,23 @@ const init = async () => {
   [minInput, maxInput].forEach((input) => {
     input.addEventListener("input", () => setStatus(""));
   });
+
+  presetButtons.forEach((button) => {
+    button.addEventListener("click", handlePresetClick);
+  });
+
+  if (smoothingInput) {
+    smoothingInput.addEventListener("input", () => {
+      updateSmoothingLabel(Number.parseFloat(smoothingInput.value));
+    });
+  }
+
+  if (refreshInput) {
+    refreshInput.addEventListener("input", () => setStatus(""));
+  }
 };
 
 init().catch(() => {
   setFormDisabled(true);
-  setHeatmapInfo();
-  setStatus("Unable to initialise KineWatch.", true);
+  setStatus("Unable to initialise KineWatch.", "error");
 });

@@ -1,11 +1,23 @@
 {
   "manifest_version": 3,
   "name": "KineWatch: Smart Playback Speed",
+  "short_name": "KineWatch",
   "description": "Automatically adjusts playback speed using YouTube's heat-map data.",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png",
+    "256": "icons/icon-256.png"
+  },
   "permissions": ["tabs", "storage"],
   "host_permissions": ["https://www.youtube.com/*"],
   "action": {
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    },
     "default_popup": "popup.html",
     "default_title": "KineWatch"
   },

@@ -14,16 +14,15 @@ const storageArea = chrome.storage?.[STORAGE_AREA_NAME] ?? null;
 
 const DEFAULT_CONFIG = {
   minSpeed: 1,
-  maxSpeed: 2
+  maxSpeed: 2,
+  smoothing: 0.25,
+  refreshIntervalMs: 1000
 };
 
 const MIN_SPEED = 0.1;
 const MAX_SPEED = 16;
-
-const OVERLAY_ID = "kinewatch-overlay";
-const OVERLAY_STYLE_ID = "kinewatch-overlay-style";
-
-let overlayElement = null;
+const OVERLAY_ID = "kinewatch-rate-overlay";
+const OVERLAY_STYLE_ID = "kinewatch-rate-overlay-style";
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
@@ -32,6 +31,22 @@ const sanitizeSpeed = (value, fallback) => {
     return fallback;
   }
   return clamp(value, MIN_SPEED, MAX_SPEED);
+};
+
+const sanitizeSmoothing = (value, fallback) => {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return clamp(parsed, 0, 0.95);
+};
+
+const sanitizeRefreshInterval = (value, fallback) => {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return clamp(parsed, 250, 4000);
 };
 
 const normalizeConfig = (input = {}) => {
@@ -47,7 +62,12 @@ const normalizeConfig = (input = {}) => {
 
   return {
     minSpeed: round(minSpeed),
-    maxSpeed: round(maxSpeed)
+    maxSpeed: round(maxSpeed),
+    smoothing: sanitizeSmoothing(source.smoothing, DEFAULT_CONFIG.smoothing),
+    refreshIntervalMs: sanitizeRefreshInterval(
+      source.refreshIntervalMs,
+      DEFAULT_CONFIG.refreshIntervalMs
+    )
   };
 };
 
@@ -131,37 +151,103 @@ const ensureOverlayStyles = () => {
   if (document.getElementById(OVERLAY_STYLE_ID)) {
     return;
   }
-
   const style = document.createElement("style");
   style.id = OVERLAY_STYLE_ID;
   style.textContent = `
     #${OVERLAY_ID} {
       position: absolute;
-      top: 12px;
-      right: 12px;
-      padding: 6px 10px;
-      border-radius: 6px;
-      background: rgba(0, 0, 0, 0.6);
-      color: #fff;
+      top: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 6px 14px;
+      border-radius: 999px;
+      background: rgba(10, 11, 18, 0.78);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      color: #f5f6fb;
       font-size: 14px;
-      line-height: 1.3;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      letter-spacing: 0.02em;
+      font-weight: 600;
+      letter-spacing: 0.01em;
       pointer-events: none;
-      z-index: 2147483646;
       opacity: 0;
-      transition: opacity 0.2s ease-in-out;
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+      transition: opacity 0.2s ease-in-out, transform 0.2s ease-out;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+      z-index: 2147483646;
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    #${OVERLAY_ID} span {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
     }
 
     body.ytp-fullscreen-allowed #${OVERLAY_ID} {
-      top: max(2vw, 12px);
-      right: max(2vw, 12px);
-      font-size: max(1.1vw, 14px);
+      top: max(2vw, 20px);
+      font-size: max(1vw, 16px);
+      padding: max(0.6vw, 10px) max(1vw, 16px);
     }
   `;
-
   document.head?.appendChild(style);
+};
+
+const setOverlayVisibility = (visible) => {
+  if (!overlayElement) {
+    return;
+  }
+  overlayElement.style.opacity = visible ? "1" : "0";
+  overlayElement.style.transform = visible
+    ? "translateX(-50%) scale(1)"
+    : "translateX(-50%) scale(0.95)";
+};
+
+const ensureOverlayElement = () => {
+  if (!videoElement) {
+    return null;
+  }
+  const playerContainer =
+    videoElement.closest(".html5-video-player") || videoElement.parentElement;
+  if (!playerContainer) {
+    return null;
+  }
+  ensureOverlayStyles();
+  let overlay = playerContainer.querySelector(`#${OVERLAY_ID}`);
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = OVERLAY_ID;
+    overlay.textContent = "—";
+    overlay.setAttribute("role", "status");
+    overlay.setAttribute("aria-live", "polite");
+    playerContainer.appendChild(overlay);
+  }
+  overlayElement = overlay;
+  return overlay;
+};
+
+const destroyOverlay = () => {
+  if (overlayElement?.parentElement) {
+    overlayElement.remove();
+  }
+  overlayElement = null;
+};
+
+const renderOverlay = ({ playbackRate, targetRate }) => {
+  const overlay = ensureOverlayElement();
+  if (!overlay || !Number.isFinite(playbackRate)) {
+    setOverlayVisibility(false);
+    return;
+  }
+  let text = `${playbackRate.toFixed(2)}×`;
+  if (
+    Number.isFinite(targetRate) &&
+    Math.abs(targetRate - playbackRate) > 0.05
+  ) {
+    const direction = targetRate > playbackRate ? "↑" : "↓";
+    text = `${playbackRate.toFixed(2)}× ${direction} ${targetRate.toFixed(2)}×`;
+  }
+  overlay.innerHTML = `<span>KineWatch</span><span>${text}</span>`;
+  setOverlayVisibility(true);
 };
 
 const gatherHeatMapPoints = () => {
@@ -198,89 +284,6 @@ const gatherHeatMapPoints = () => {
   }
 
   return dedupeAndSortPoints(allPoints);
-};
-
-const setOverlayVisibility = (visible) => {
-  if (!overlayElement) {
-    return;
-  }
-  overlayElement.style.opacity = visible ? "1" : "0";
-};
-
-const ensureOverlayElement = () => {
-  if (!videoElement) {
-    return null;
-  }
-
-  const playerContainer =
-    videoElement.closest(".html5-video-player") || videoElement.parentElement;
-
-  if (!playerContainer) {
-    return null;
-  }
-
-  ensureOverlayStyles();
-
-  let overlay = playerContainer.querySelector(`#${OVERLAY_ID}`);
-  if (!overlay) {
-    overlay = document.createElement("div");
-    overlay.id = OVERLAY_ID;
-    overlay.textContent = "KineWatch —";
-    overlay.style.opacity = "0";
-    playerContainer.appendChild(overlay);
-  }
-
-  overlayElement = overlay;
-  return overlay;
-};
-
-const renderOverlay = (data = {}) => {
-  const overlay = overlayElement ?? ensureOverlayElement();
-  if (!overlay) {
-    return;
-  }
-
-  const {
-    playbackRate,
-    targetRate,
-    normalizedIntensity,
-    rawRatio,
-    heatmapAvailable,
-    rawRatioAvailable,
-    speedRatio
-  } = data;
-
-  if (!Number.isFinite(playbackRate)) {
-    overlay.textContent = "KineWatch —";
-    setOverlayVisibility(false);
-    return;
-  }
-
-  const speedText = `${playbackRate.toFixed(2)}×`;
-  const targetText =
-    Number.isFinite(targetRate) && Math.abs(targetRate - playbackRate) > 0.01
-      ? ` → ${targetRate.toFixed(2)}×`
-      : "";
-
-  let detailText = "";
-  if (heatmapAvailable) {
-    if (Number.isFinite(normalizedIntensity)) {
-      detailText = ` • heat ${(clamp(normalizedIntensity, 0, 1) * 100).toFixed(
-        0
-      )}%`;
-    }
-    if (rawRatioAvailable && Number.isFinite(rawRatio)) {
-      detailText += ` • raw ${(clamp(rawRatio, 0, 1) * 100).toFixed(0)}%`;
-    }
-    if (Number.isFinite(speedRatio)) {
-      detailText += ` • speed ${(clamp(speedRatio, 0, 1) * 100).toFixed(0)}%`;
-    }
-  } else if (heatmapAvailable === false) {
-    detailText = " • heat-map unavailable";
-  }
-
-  overlay.textContent = `KineWatch ${speedText}${targetText}${detailText}`;
-  setOverlayVisibility(true);
 };
 
 const parsePixelValue = (value) => {
@@ -443,6 +446,7 @@ let videoElement = null;
 let currentVideoId = null;
 let heatmapMinRawY = 0;
 let heatmapMaxRawY = 0;
+let overlayElement = null;
 
 const samplePlaybackRatio = () => {
   if (!videoElement || !Number.isFinite(videoElement.duration) || videoElement.duration <= 0) {
@@ -454,6 +458,7 @@ const samplePlaybackRatio = () => {
 
 const updatePlaybackRate = () => {
   if (!videoElement) {
+    destroyOverlay();
     return;
   }
 
@@ -473,29 +478,48 @@ const updatePlaybackRate = () => {
     );
   }
   const speedRatio = rawRatio;
-  const rawRatioAvailable =
-    Number.isFinite(heatmapMinRawY) &&
-    Number.isFinite(heatmapMaxRawY) &&
-    heatmapMaxRawY > heatmapMinRawY;
+
   const targetRate = Number.isFinite(speedRatio)
     ? getTargetPlaybackRate(speedRatio, config)
     : null;
 
-  if (Number.isFinite(targetRate)) {
-    const difference = Math.abs(videoElement.playbackRate - targetRate);
+  if (!Number.isFinite(targetRate)) {
+    const fallbackRate = Number.isFinite(videoElement.playbackRate)
+      ? videoElement.playbackRate
+      : config.minSpeed;
+    renderOverlay({
+      playbackRate: fallbackRate,
+      targetRate: null
+    });
+    return;
+  }
+
+  const smoothing = clamp(
+    Number.isFinite(config.smoothing) ? config.smoothing : DEFAULT_CONFIG.smoothing,
+    0,
+    0.95
+  );
+
+  let nextRate = targetRate;
+  if (smoothing > 0 && Number.isFinite(videoElement.playbackRate)) {
+    const factor = 1 - smoothing;
+    nextRate =
+      videoElement.playbackRate +
+      (targetRate - videoElement.playbackRate) * factor;
+  }
+
+  if (Number.isFinite(nextRate)) {
+    const difference = Math.abs(videoElement.playbackRate - nextRate);
     if (difference > 0.01) {
-      videoElement.playbackRate = targetRate;
+      videoElement.playbackRate = nextRate;
     }
   }
 
   renderOverlay({
-    playbackRate: videoElement.playbackRate,
-    targetRate,
-    normalizedIntensity: metrics.normalizedIntensity,
-    rawRatio,
-    heatmapAvailable: rawRatioAvailable,
-    rawRatioAvailable,
-    speedRatio
+    playbackRate: Number.isFinite(videoElement.playbackRate)
+      ? videoElement.playbackRate
+      : targetRate,
+    targetRate
   });
 };
 
@@ -508,7 +532,17 @@ const clearHeatmapRetry = () => {
 
 const scheduleHeatmapRefresh = () => {
   clearHeatmapRetry();
-  const delay = Math.min(1000 * Math.pow(1.5, heatmapRetryAttempt), 10000);
+  const baseDelay = clamp(
+    Number.isFinite(config.refreshIntervalMs)
+      ? config.refreshIntervalMs
+      : DEFAULT_CONFIG.refreshIntervalMs,
+    250,
+    4000
+  );
+  const delay = Math.min(
+    baseDelay * Math.pow(1.5, heatmapRetryAttempt),
+    baseDelay * 6
+  );
   heatmapRetryHandle = window.setTimeout(() => {
     heatmapRetryAttempt += 1;
     refreshHeatmap();
@@ -561,11 +595,8 @@ const detachVideoListeners = () => {
   videoElement.removeEventListener("timeupdate", updatePlaybackRate);
   videoElement.removeEventListener("loadedmetadata", refreshHeatmap);
   videoElement.removeEventListener("durationchange", refreshHeatmap);
-  if (overlayElement) {
-    overlayElement.style.opacity = "0";
-  }
   videoElement = null;
-  overlayElement = null;
+  destroyOverlay();
   heatmapMinRawY = 0;
   heatmapMaxRawY = 0;
 };
@@ -583,7 +614,6 @@ const attachVideoListeners = () => {
   videoElement.addEventListener("loadedmetadata", refreshHeatmap);
   videoElement.addEventListener("durationchange", refreshHeatmap);
 
-  ensureOverlayElement();
   updatePlaybackRate();
   refreshHeatmap();
 };
@@ -622,10 +652,7 @@ const handleNavigation = () => {
   lastHeatmapError = null;
   heatmapRetryAttempt = 0;
   clearHeatmapRetry();
-  if (overlayElement) {
-    overlayElement.style.opacity = "0";
-  }
-  overlayElement = null;
+  destroyOverlay();
   heatmapMinRawY = 0;
   heatmapMaxRawY = 0;
 
